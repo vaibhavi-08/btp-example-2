@@ -1,0 +1,66 @@
+{
+    "Checkout": {
+      "uses_submodules": false,
+      "uses_lfs": false,
+      "notes": []
+    },
+    "Setup": {
+      "languages": [
+        "python"
+      ],
+      "build_tools": [
+        "python-req"
+      ],
+      "dependency_commands": [
+        "pip-compile"
+      ],
+      "caching": [
+        ".venv"
+      ]
+    },
+    "Build": {
+      "build_commands": [
+        "pip install -r requirements.txt",
+        "python run.py"
+      ],
+      "skip_tests_here": false,
+      "artifacts": []
+    },
+    "Test": {
+      "test_frameworks": [],
+      "test_paths": [
+        "test/"
+      ],
+      "test_commands": [],
+      "use_coverage": false
+    },
+    "Quality": {
+      "linters": [
+        "pylama"
+      ],
+      "security_tools": [
+        "safety",
+        "snyk"
+      ],
+      "notes": [
+        "Consider running safety and snyk to scan dependencies for vulnerabilities."
+      ]
+    },
+    "Package": {
+      "package_type": null,
+      "package_commands": [],
+      "artifact_paths": []
+    },
+    "Deploy": {
+      "deployment_targets": [
+        "docker"
+      ],
+      "deployment_files": [
+        "Dockerfile"
+      ],
+      "deploy_commands": [
+        "docker build -t <image>:<tag> ."
+      ],
+      "manual_or_auto": "manual"
+    }
+  }
