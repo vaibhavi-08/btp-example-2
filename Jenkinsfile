@@ -1,25 +1,17 @@
 #!groovy
 
 pipeline {
-    // 🔴 OLD (causing the error):
-    // agent {
-    //     docker {
-    //         image 'python:3.7'
-    //         args '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
-    //     }
-    // }
+    // Run directly on the Jenkins node (host),
+    // which already has Docker installed.
+    agent any
 
-    // ✅ NEW: use a modern Python version compatible with Werkzeug>=3, locust, safety, etc.
-    agent {
-        docker {
-            image 'python:3.10-slim'
-            // or 'python:3.11-slim' if you like
-            args '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
-        }
+    environment {
+        IMAGE_NAME = "restalion/python-jenkins-pipeline"
+        CONTAINER_NAME = "python-jenkins-pipeline"
+        VENV_PATH = ".venv"
     }
 
     stages {
-
         stage('Checkout') {
             steps {
                 checkout scm
@@ -31,12 +23,14 @@ pipeline {
                 sh '''
                     set -eux
 
+                    # Create virtualenv if it doesn't exist
                     if [ ! -d ".venv" ]; then
-                      python -m venv .venv
+                      python3 -m venv .venv
                     fi
 
                     . .venv/bin/activate
 
+                    # Upgrade pip & install dependencies
                     pip install --upgrade pip
                     pip install --disable-pip-version-check -r requirements.txt
                 '''
@@ -49,10 +43,13 @@ pipeline {
                     set -eux
                     . .venv/bin/activate
 
+                    # Compile Python sources
                     python -m compileall .
 
+                    # Ensure Docker network exists
                     docker network create ci || true
 
+                    # Build Docker image (no push/deploy)
                     docker build -t restalion/python-jenkins-pipeline:${BUILD_NUMBER} .
                 '''
             }
@@ -63,14 +60,15 @@ pipeline {
                 script {
                     def venvActivate = '. .venv/bin/activate'
 
+                    // Start the app container once
                     sh """
                         set -eux
 
-                        docker run --name python-jenkins-pipeline \\
+                        docker run --name ${CONTAINER_NAME} \\
                           --detach --rm \\
                           --network ci \\
                           -p 5001:5000 \\
-                          restalion/python-jenkins-pipeline:${BUILD_NUMBER}
+                          ${IMAGE_NAME}:${BUILD_NUMBER}
                     """
 
                     try {
@@ -79,7 +77,9 @@ pipeline {
                                 sh """
                                     set -eux
                                     ${venvActivate}
+                                    # Unit tests
                                     nosetests -v test
+                                    # Integration tests
                                     nosetests -v int_test
                                 """
                             },
@@ -96,6 +96,7 @@ pipeline {
                                 sh """
                                     set -eux
                                     ${venvActivate}
+                                    # Performance tests with Locust
                                     locust -f ./perf_test/locustfile.py \\
                                       --no-web -c 1000 -r 100 \\
                                       --run-time 1m \\
@@ -104,7 +105,8 @@ pipeline {
                             }
                         )
                     } finally {
-                        sh 'docker stop python-jenkins-pipeline || true'
+                        // Always stop container
+                        sh 'docker stop ${CONTAINER_NAME} || true'
                     }
                 }
             }
