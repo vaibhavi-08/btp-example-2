@@ -1,7 +1,6 @@
 #!groovy
 
 pipeline {
-    // Run directly on the Jenkins node
     agent any
 
     environment {
@@ -11,7 +10,6 @@ pipeline {
     }
 
     stages {
-
         stage('Checkout') {
             steps {
                 checkout scm
@@ -23,7 +21,7 @@ pipeline {
                 sh '''
                     set -eux
 
-                    # Create virtualenv (Python 3)
+                    # Create virtualenv with python3 if not present
                     if [ ! -d ".venv" ]; then
                       python3 -m venv .venv
                     fi
@@ -34,12 +32,25 @@ pipeline {
                     pip install --upgrade pip
                     pip install --disable-pip-version-check -r requirements.txt
 
-                    # Patch for nose + Python 3.10 (collections.Callable)
-                    cat > sitecustomize.py << 'EOF'
-import collections, collections.abc
-if not hasattr(collections, "Callable"):
+                    # Create sitecustomize.py INSIDE THE VENV site-packages
+                    python - << 'PYCODE'
+import os, sysconfig
+
+purelib = sysconfig.get_paths()["purelib"]
+os.makedirs(purelib, exist_ok=True)
+sc_path = os.path.join(purelib, "sitecustomize.py")
+
+content = """import collections, collections.abc
+# Patch for old libraries like nose on Python 3.10+
+if not hasattr(collections, 'Callable'):
     collections.Callable = collections.abc.Callable
-EOF
+"""
+
+with open(sc_path, "w", encoding="utf-8") as f:
+    f.write(content)
+
+print("Wrote sitecustomize.py to:", sc_path)
+PYCODE
                 '''
             }
         }
@@ -78,7 +89,7 @@ EOF
                     """
 
                     try {
-                        // For now: only unit + integration tests
+                        // Run unit + integration tests with nose
                         sh """
                             set -eux
                             ${venvActivate}
