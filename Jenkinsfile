@@ -1,35 +1,31 @@
 pipeline {
     agent {
-        // Build and tests run inside a clean Python docker image
         docker {
-            image 'python:3.7'          // or bump to a newer version if your code allows (more secure)
+            image 'python:3.7'
             args  '-u root:root'
         }
     }
 
     environment {
         IMAGE_NAME    = 'restalion/python-jenkins-pipeline'
-        PIP_CACHE_DIR = "${WORKSPACE}/.pip-cache"  // simple pip cache to speed up builds
+        PIP_CACHE_DIR = "${WORKSPACE}/.pip-cache"
     }
 
     options {
         timestamps()
-        ansiColor('xterm')
+        wrap([$class: 'AnsiColorBuildWrapper', 'colorMapName': 'xterm'])
     }
 
     stages {
         stage('checkout') {
             steps {
-                // --- Checkout stage ---
                 checkout scm
             }
         }
 
         stage('setup') {
             steps {
-                // --- Setup stage ---
                 sh 'mkdir -p .pip-cache'
-                // Use a cache and avoid re-downloading wheels every time
                 sh """
                     export PIP_CACHE_DIR=${PIP_CACHE_DIR}
                     python -m pip install --upgrade pip --disable-pip-version-check
@@ -40,11 +36,7 @@ pipeline {
 
         stage('build') {
             steps {
-                // --- Build stage ---
-                // Compile all Python sources (quick sanity check)
                 sh 'python -m compileall .'
-
-                // Build Docker image for integration & performance tests
                 sh """
                     docker build \
                       --pull \
@@ -57,13 +49,10 @@ pipeline {
         stage('test') {
             steps {
                 script {
-                    // --- Test stage ---
                     def appImage = "${IMAGE_NAME}:${env.BUILD_NUMBER}"
 
-                    // Ensure network exists for container
                     sh 'docker network create ci || true'
 
-                    // Start container once and then run tests in parallel against it
                     sh """
                         docker run \
                           --name python-jenkins-pipeline \
@@ -74,7 +63,6 @@ pipeline {
                     """
 
                     try {
-                        // Parallelize logically independent test groups
                         parallel(
                             unit_and_mutation: {
                                 sh """
@@ -89,7 +77,6 @@ pipeline {
                                 sh """
                                     nosetests -v int_test
 
-                                    # Performance tests with locust
                                     locust -f ./perf_test/locustfile.py \
                                       --no-web \
                                       -c 1000 -r 100 \
@@ -99,7 +86,6 @@ pipeline {
                             }
                         )
                     } finally {
-                        // Always stop container so the agent is clean
                         sh 'docker stop python-jenkins-pipeline || true'
                     }
                 }
@@ -108,14 +94,10 @@ pipeline {
 
         stage('quality') {
             steps {
-                // --- Quality stage ---
-                // Dependency vulnerability scan
                 sh """
                     export PIP_CACHE_DIR=${PIP_CACHE_DIR}
                     safety check
                 """
-
-                // Static code quality/linting
                 sh 'pylama'
             }
         }
@@ -123,7 +105,6 @@ pipeline {
 
     post {
         always {
-            // Clean up docker network if it was created
             sh 'docker network rm ci || true'
         }
     }
