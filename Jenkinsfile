@@ -10,7 +10,6 @@ pipeline {
     }
 
     options {
-        // avoid double checkout
         skipDefaultCheckout()
         timestamps()
     }
@@ -33,21 +32,18 @@ pipeline {
         // ==================== setup ====================
         stage('setup') {
             steps {
-                echo "==> Create virtualenv and install dependencies (no root needed)"
+                echo "==> Install dependencies in user site-packages (no root, no venv)"
                 sh '''
                     set -e
 
-                    # Create venv in the workspace
-                    python -m venv .venv
+                    # Make sure HOME is a writable directory (the workspace)
+                    export HOME="$PWD"
 
-                    # Activate venv
-                    . .venv/bin/activate
+                    # Upgrade pip for this user only
+                    python -m pip install --user --upgrade pip
 
-                    # Upgrade pip inside venv (this writes only into .venv)
-                    pip install --upgrade pip
-
-                    # Install project dependencies
-                    pip install -r requirements.txt
+                    # Install project dependencies into $HOME/.local
+                    python -m pip install --user -r requirements.txt
                 '''
             }
         }
@@ -56,17 +52,15 @@ pipeline {
         stage('build') {
             steps {
                 echo "==> Compile Python sources and build Docker image"
-
-                // Compile using venv Python
                 sh '''
                     set -e
-                    . .venv/bin/activate
+                    export HOME="$PWD"
+                    export PATH="$HOME/.local/bin:$PATH"
+
+                    # Compile sources
                     python -m compileall .
-                '''
 
-                // Build Docker image (no push)
-                sh '''
-                    set -e
+                    # Build Docker image (no push)
                     docker build -t $IMAGE_NAME:$BUILD_NUMBER .
                 '''
             }
@@ -78,9 +72,10 @@ pipeline {
                 echo "==> Run unit, mutation, integration and performance tests"
                 sh '''
                     set -e
-                    . .venv/bin/activate
+                    export HOME="$PWD"
+                    export PATH="$HOME/.local/bin:$PATH"
 
-                    # Run app container for tests
+                    # Start Docker container for tests
                     docker run --name python-jenkins-pipeline \
                                --detach --rm \
                                --network ci \
@@ -103,7 +98,7 @@ pipeline {
                            -c 1000 -r 100 --run-time 1m \
                            -H http://172.18.0.3:5001
 
-                    # Always try to stop container at the end
+                    # Stop container (ignore errors)
                     docker stop python-jenkins-pipeline || true
                 '''
             }
@@ -115,7 +110,8 @@ pipeline {
                 echo "==> Dependency vulnerability checks and code inspection"
                 sh '''
                     set -e
-                    . .venv/bin/activate
+                    export HOME="$PWD"
+                    export PATH="$HOME/.local/bin:$PATH"
 
                     safety check
                     pylama
