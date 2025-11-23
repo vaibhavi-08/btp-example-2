@@ -1,11 +1,19 @@
 #!groovy
 
 pipeline {
-    // Use a Docker agent with Python and access to host Docker
+    // 🔴 OLD (causing the error):
+    // agent {
+    //     docker {
+    //         image 'python:3.7'
+    //         args '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
+    //     }
+    // }
+
+    // ✅ NEW: use a modern Python version compatible with Werkzeug>=3, locust, safety, etc.
     agent {
         docker {
-            image 'python:3.7'
-            // Allow Docker CLI inside the container (adjust socket path if needed)
+            image 'python:3.10-slim'
+            // or 'python:3.11-slim' if you like
             args '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
         }
     }
@@ -14,29 +22,22 @@ pipeline {
 
         stage('Checkout') {
             steps {
-                // === Checkout ===
-                // From your JSON: "checkout scm"
                 checkout scm
             }
         }
 
         stage('Setup') {
             steps {
-                // === Setup ===
-                // Prepare venv + install deps (with pip upgrade)
                 sh '''
                     set -eux
 
-                    # Create virtualenv if it doesn't exist
                     if [ ! -d ".venv" ]; then
                       python -m venv .venv
                     fi
 
                     . .venv/bin/activate
 
-                    # Upgrade pip & install dependencies
                     pip install --upgrade pip
-                    # Disable version check for a tiny speedup
                     pip install --disable-pip-version-check -r requirements.txt
                 '''
             }
@@ -44,18 +45,14 @@ pipeline {
 
         stage('Build') {
             steps {
-                // === Build ===
                 sh '''
                     set -eux
                     . .venv/bin/activate
 
-                    # Compile Python sources (from original "Compile" stage)
                     python -m compileall .
 
-                    # Ensure a dedicated Docker network exists (used later for tests)
                     docker network create ci || true
 
-                    # Build Docker image but do NOT push/deploy
                     docker build -t restalion/python-jenkins-pipeline:${BUILD_NUMBER} .
                 '''
             }
@@ -64,10 +61,8 @@ pipeline {
         stage('Test') {
             steps {
                 script {
-                    // We'll reuse this in all sh calls in this stage
                     def venvActivate = '. .venv/bin/activate'
 
-                    // Start the container once, then run tests in parallel
                     sh """
                         set -eux
 
@@ -84,9 +79,7 @@ pipeline {
                                 sh """
                                     set -eux
                                     ${venvActivate}
-                                    # Unit tests
                                     nosetests -v test
-                                    # Integration tests
                                     nosetests -v int_test
                                 """
                             },
@@ -94,7 +87,6 @@ pipeline {
                                 sh """
                                     set -eux
                                     ${venvActivate}
-                                    # Mutation tests with cosmic-ray
                                     cosmic-ray init config.yml jenkins_session
                                     cosmic-ray --verbose exec jenkins_session
                                     cosmic-ray dump jenkins_session | cr-report
@@ -104,8 +96,6 @@ pipeline {
                                 sh """
                                     set -eux
                                     ${venvActivate}
-                                    # Performance tests with Locust
-                                    # (IP/port from your original command)
                                     locust -f ./perf_test/locustfile.py \\
                                       --no-web -c 1000 -r 100 \\
                                       --run-time 1m \\
@@ -114,7 +104,6 @@ pipeline {
                             }
                         )
                     } finally {
-                        // Always stop container even if tests fail
                         sh 'docker stop python-jenkins-pipeline || true'
                     }
                 }
@@ -126,13 +115,11 @@ pipeline {
                 script {
                     def venvActivate = '. .venv/bin/activate'
 
-                    // Run safety + pylama in parallel to save time
                     parallel(
                         Dependency_Vulnerabilities: {
                             sh """
                                 set -eux
                                 ${venvActivate}
-                                # Dependency vulnerability scan
                                 safety check
                             """
                         },
@@ -140,7 +127,6 @@ pipeline {
                             sh """
                                 set -eux
                                 ${venvActivate}
-                                # Lint / quality gate
                                 pylama
                             """
                         }
