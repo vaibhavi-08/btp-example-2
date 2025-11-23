@@ -1,121 +1,151 @@
-// Jenkinsfile for https://github.com/vaibhavi-08/btp-example-2
+#!groovy
 
 pipeline {
+    // Use a Docker agent with Python and access to host Docker
     agent {
         docker {
             image 'python:3.7'
-            // Docker socket so we can build/run Docker from inside the container
-            args '-v /var/run/docker.sock:/var/run/docker.sock'
+            // Allow Docker CLI inside the container (adjust socket path if needed)
+            args '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'
         }
-    }
-
-    options {
-        skipDefaultCheckout()
-        timestamps()
-    }
-
-    environment {
-        IMAGE_NAME = 'restalion/python-jenkins-pipeline'
-        IMAGE_TAG  = "${env.BUILD_NUMBER}"
     }
 
     stages {
 
-        // ==================== checkout ====================
-        stage('checkout') {
+        stage('Checkout') {
             steps {
-                echo "==> Checkout the source code for the Python Jenkins pipeline project"
+                // === Checkout ===
+                // From your JSON: "checkout scm"
                 checkout scm
             }
         }
 
-        // ==================== setup ====================
-        stage('setup') {
+        stage('Setup') {
             steps {
-                echo "==> Install dependencies in user site-packages (no root, no venv)"
+                // === Setup ===
+                // Prepare venv + install deps (with pip upgrade)
                 sh '''
-                    set -e
+                    set -eux
 
-                    # Make sure HOME is a writable directory (the workspace)
-                    export HOME="$PWD"
+                    # Create virtualenv if it doesn't exist
+                    if [ ! -d ".venv" ]; then
+                      python -m venv .venv
+                    fi
 
-                    # Upgrade pip for this user only
-                    python -m pip install --user --upgrade pip
+                    . .venv/bin/activate
 
-                    # Install project dependencies into $HOME/.local
-                    python -m pip install --user -r requirements.txt
+                    # Upgrade pip & install dependencies
+                    pip install --upgrade pip
+                    # Disable version check for a tiny speedup
+                    pip install --disable-pip-version-check -r requirements.txt
                 '''
             }
         }
 
-        // ==================== build ====================
-        stage('build') {
+        stage('Build') {
             steps {
-                echo "==> Compile Python sources and build Docker image"
+                // === Build ===
                 sh '''
-                    set -e
-                    export HOME="$PWD"
-                    export PATH="$HOME/.local/bin:$PATH"
+                    set -eux
+                    . .venv/bin/activate
 
-                    # Compile sources
+                    # Compile Python sources (from original "Compile" stage)
                     python -m compileall .
 
-                    # Build Docker image (no push)
-                    docker build -t $IMAGE_NAME:$BUILD_NUMBER .
+                    # Ensure a dedicated Docker network exists (used later for tests)
+                    docker network create ci || true
+
+                    # Build Docker image but do NOT push/deploy
+                    docker build -t restalion/python-jenkins-pipeline:${BUILD_NUMBER} .
                 '''
             }
         }
 
-        // ==================== test ====================
-        stage('test') {
+        stage('Test') {
             steps {
-                echo "==> Run unit, mutation, integration and performance tests"
-                sh '''
-                    set -e
-                    export HOME="$PWD"
-                    export PATH="$HOME/.local/bin:$PATH"
+                script {
+                    // We'll reuse this in all sh calls in this stage
+                    def venvActivate = '. .venv/bin/activate'
 
-                    # Start Docker container for tests
-                    docker run --name python-jenkins-pipeline \
-                               --detach --rm \
-                               --network ci \
-                               -p 5001:5000 \
-                               $IMAGE_NAME:$BUILD_NUMBER
+                    // Start the container once, then run tests in parallel
+                    sh """
+                        set -eux
 
-                    # Unit tests
-                    nosetests -v test
+                        docker run --name python-jenkins-pipeline \\
+                          --detach --rm \\
+                          --network ci \\
+                          -p 5001:5000 \\
+                          restalion/python-jenkins-pipeline:${BUILD_NUMBER}
+                    """
 
-                    # Mutation tests
-                    cosmic-ray init config.yml jenkins_session
-                    cosmic-ray --verbose exec jenkins_session
-                    cosmic-ray dump jenkins_session | cr-report
-
-                    # Integration tests
-                    nosetests -v int_test
-
-                    # Performance tests
-                    locust -f ./perf_test/locustfile.py --no-web \
-                           -c 1000 -r 100 --run-time 1m \
-                           -H http://172.18.0.3:5001
-
-                    # Stop container (ignore errors)
-                    docker stop python-jenkins-pipeline || true
-                '''
+                    try {
+                        parallel(
+                            Unit_and_Integration: {
+                                sh """
+                                    set -eux
+                                    ${venvActivate}
+                                    # Unit tests
+                                    nosetests -v test
+                                    # Integration tests
+                                    nosetests -v int_test
+                                """
+                            },
+                            Mutation_Tests: {
+                                sh """
+                                    set -eux
+                                    ${venvActivate}
+                                    # Mutation tests with cosmic-ray
+                                    cosmic-ray init config.yml jenkins_session
+                                    cosmic-ray --verbose exec jenkins_session
+                                    cosmic-ray dump jenkins_session | cr-report
+                                """
+                            },
+                            Performance_Tests: {
+                                sh """
+                                    set -eux
+                                    ${venvActivate}
+                                    # Performance tests with Locust
+                                    # (IP/port from your original command)
+                                    locust -f ./perf_test/locustfile.py \\
+                                      --no-web -c 1000 -r 100 \\
+                                      --run-time 1m \\
+                                      -H http://172.18.0.3:5001
+                                """
+                            }
+                        )
+                    } finally {
+                        // Always stop container even if tests fail
+                        sh 'docker stop python-jenkins-pipeline || true'
+                    }
+                }
             }
         }
 
-        // ==================== quality ====================
-        stage('quality') {
+        stage('Quality') {
             steps {
-                echo "==> Dependency vulnerability checks and code inspection"
-                sh '''
-                    set -e
-                    export HOME="$PWD"
-                    export PATH="$HOME/.local/bin:$PATH"
+                script {
+                    def venvActivate = '. .venv/bin/activate'
 
-                    safety check
-                    pylama
-                '''
+                    // Run safety + pylama in parallel to save time
+                    parallel(
+                        Dependency_Vulnerabilities: {
+                            sh """
+                                set -eux
+                                ${venvActivate}
+                                # Dependency vulnerability scan
+                                safety check
+                            """
+                        },
+                        Code_Inspection: {
+                            sh """
+                                set -eux
+                                ${venvActivate}
+                                # Lint / quality gate
+                                pylama
+                            """
+                        }
+                    )
+                }
             }
         }
     }

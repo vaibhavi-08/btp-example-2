@@ -1,69 +1,57 @@
 {
   "checkout": {
-    "description": "Checkout repository",
-    "commands": [
-      "git checkout SCM"
-    ]
+    "summary": "Checkout the source code for the Python Jenkins pipeline project.",
+    "jenkins_steps": [
+      "checkout scm"
+    ],
+    "notes": []
   },
   "setup": {
-    "description": "Setup Python environment and install dependencies",
-    "commands": [
-      "python -m venv venv",
-      "source venv/bin/activate",
-      "pip install --user --upgrade pip",
-      "pip install --user -r requirements.txt"
+    "summary": "Prepare the Python environment and install dependencies inside the docker agent container.",
+    "jenkins_steps": [
+      "sh 'pip install --upgrade pip'",
+      "sh '. .venv/bin/activate && pip install -r requirements.txt'"
     ],
-    "tools": [
-      "python3"
-    ],
-    "environment": {
-      "HOME": "${PWD}"
-    }
+    "notes": [
+      "This corresponds to the original 'Environment preparation' stage.",
+      "Caching pip downloads will speed up repeated builds."
+    ]
   },
   "build": {
-    "description": "Compile Python sources and build Docker image",
-    "commands": [
-      "compileall .",
-      "docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} ."
+    "summary": "Compile Python sources if desired and build the Docker image that will be used for integration and performance testing.",
+    "jenkins_steps": [
+      "sh 'python -m compileall .'",
+      "sh 'docker build -t restalion/python-jenkins-pipeline:${env.BUILD_NUMBER} .'"
     ],
-    "tools": [
-      "docker"
-    ],
-    "environment": {
-      "HOME": "${PWD}",
-      "PATH": "${HOME}/.local/bin:${PATH}"
-    }
+    "notes": [
+      "The compile step comes from the original 'Compile' stage.",
+      "The Docker build step comes from 'Build Docker image'; we intentionally do not push the image here."
+    ]
   },
   "test": {
-    "description": "Run unit, integration tests",
-    "commands": [
-      "nosetests -v test",
-      "nosetests -v int_test"
+    "summary": "Run all levels of testing: unit tests, mutation tests, integration tests, and performance tests against the running Docker container.",
+    "jenkins_steps": [
+      "sh 'docker run --name python-jenkins-pipeline --detach --rm --network ci -p 5001:5000 restalion/python-jenkins-pipeline:${env.BUILD_NUMBER}'",
+      "sh 'nosetests -v test'",
+      "sh 'cosmic-ray init config.yml jenkins_session && cosmic-ray --verbose exec jenkins_session && cosmic-ray dump jenkins_session | cr-report'",
+      "sh 'nosetests -v int_test'",
+      "sh 'locust -f ./perf_test/locustfile.py --no-web -c 1000 -r 100 --run-time 1m -H http://172.18.0.3:5001'",
+      "sh 'docker stop python-jenkins-pipeline || true'"
     ],
-    "tools": [
-      "pytest"
-    ],
-    "environment": {
-      "HOME": "${PWD}",
-      "PATH": "${HOME}/.local/bin:${PATH}"
-    }
+    "notes": [
+      "This aggregates the 'Unit tests', 'Mutation tests', 'Run Docker image', 'Integration tests', and 'Performance tests' stages into a single logical Test stage.",
+      "If runtime is high, some of these could be parallelized in a future refinement."
+    ]
   },
   "quality": {
-    "description": "Code quality checks and security scans",
-    "commands": [
-      "safety check",
-      "pylint src/",
-      "flake8 src/",
-      "bandit -r src/"
+    "summary": "Run dependency vulnerability checks and code inspection (linting) as quality gates.",
+    "jenkins_steps": [
+      "sh 'safety check'",
+      "sh 'pylama'"
     ],
-    "tools": [
-      "pylint",
-      "flake8",
-      "bandit"
-    ],
-    "environment": {
-      "HOME": "${PWD}",
-      "PATH": "${HOME}/.local/bin:${PATH}"
-    }
+    "notes": [
+      "This combines 'Dependency vulnerability tests' and 'Code inspection & quality gate'.",
+      "The original 'Push Docker image' stage is intentionally omitted (no deploy/publish in this plan)."
+    ]
   }
 }
