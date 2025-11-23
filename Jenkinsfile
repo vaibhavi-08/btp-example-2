@@ -12,8 +12,8 @@ pipeline {
     }
 
     options {
+        // Keep only what we know is valid on your Jenkins
         timestamps()
-        wrap([$class: 'AnsiColorBuildWrapper', 'colorMapName': 'xterm'])
     }
 
     stages {
