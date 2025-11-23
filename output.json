@@ -1,0 +1,66 @@
+{
+  "checkout": {
+    "description": "Checkout repository",
+    "commands": [
+      "git checkout SCM"
+    ]
+  },
+  "setup": {
+    "description": "Setup Python environment and install dependencies",
+    "commands": [
+      "python -m venv venv",
+      "source venv/bin/activate",
+      "pip install --user --upgrade pip",
+      "pip install --user -r requirements.txt"
+    ],
+    "tools": [
+      "python3"
+    ],
+    "environment": {
+      "HOME": "$PWD",
+      "PATH": "${HOME}/.local/bin:$PATH"
+    }
+  },
+  "build": {
+    "description": "Compile and package application",
+    "commands": [
+      "python -m compileall .",
+      "docker build -t $IMAGE_NAME:$BUILD_NUMBER ."
+    ],
+    "artifacts": [
+      "Docker image"
+    ]
+  },
+  "test": {
+    "description": "Run unit, integration, and performance tests",
+    "commands": [
+      "nosetests -v test",
+      "cosmic-ray init config.yml jenkins_session",
+      "cosmic-ray --verbose exec jenkins_session",
+      "cosmic-ray dump jenkins_session | cr-report",
+      "locust -f ./perf_test/locustfile.py --no-web -c 1000 -r 100 --run-time 1m -H http://172.18.0.3:5001"
+    ],
+    "reports": [
+      "test-results/*.xml"
+    ],
+    "junit_results": "test-results/*.xml",
+    "coverage_report": ""
+  },
+  "quality": {
+    "description": "Linting, security checks, and dependency vulnerability scanning",
+    "commands": [
+      "safety check",
+      "pylint src/",
+      "flake8 src/",
+      "bandit -r src/",
+      "sonar-scanner"
+    ],
+    "tools": [
+      "pylint",
+      "flake8",
+      "bandit",
+      "safety",
+      "sonarqube"
+    ]
+  }
+}
