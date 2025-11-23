@@ -1,16 +1,16 @@
-// Jenkinsfile
+// Jenkinsfile for https://github.com/vaibhavi-08/btp-example-2
 
 pipeline {
     agent {
         docker {
             image 'python:3.7'
-            // Run as root (default) so pip can install system packages
-            // and allow Docker-in-Docker via socket.
+            // Docker socket so we can build/run Docker from inside the container
             args '-v /var/run/docker.sock:/var/run/docker.sock'
         }
     }
 
     options {
+        // avoid double checkout
         skipDefaultCheckout()
         timestamps()
     }
@@ -22,7 +22,7 @@ pipeline {
 
     stages {
 
-        // ------------------ checkout ------------------
+        // ==================== checkout ====================
         stage('checkout') {
             steps {
                 echo "==> Checkout the source code for the Python Jenkins pipeline project"
@@ -30,75 +30,96 @@ pipeline {
             }
         }
 
-        // ------------------ setup ------------------
+        // ==================== setup ====================
         stage('setup') {
             steps {
-                echo "==> Prepare Python environment and install dependencies"
-                // Upgrading pip is optional; it should now work as root.
-                sh 'python -m pip install --upgrade pip'
-                sh 'python -m pip install -r requirements.txt'
+                echo "==> Create virtualenv and install dependencies (no root needed)"
+                sh '''
+                    set -e
+
+                    # Create venv in the workspace
+                    python -m venv .venv
+
+                    # Activate venv
+                    . .venv/bin/activate
+
+                    # Upgrade pip inside venv (this writes only into .venv)
+                    pip install --upgrade pip
+
+                    # Install project dependencies
+                    pip install -r requirements.txt
+                '''
             }
         }
 
-        // ------------------ build ------------------
+        // ==================== build ====================
         stage('build') {
             steps {
-                echo "==> Compile Python sources"
-                sh 'python -m compileall .'
+                echo "==> Compile Python sources and build Docker image"
 
-                echo "==> Build Docker image (no push, just local use)"
-                script {
-                    def fullImage = "${IMAGE_NAME}:${IMAGE_TAG}"
-                    sh "docker build -t ${fullImage} ."
-                }
+                // Compile using venv Python
+                sh '''
+                    set -e
+                    . .venv/bin/activate
+                    python -m compileall .
+                '''
+
+                // Build Docker image (no push)
+                sh '''
+                    set -e
+                    docker build -t $IMAGE_NAME:$BUILD_NUMBER .
+                '''
             }
         }
 
-        // ------------------ test ------------------
+        // ==================== test ====================
         stage('test') {
             steps {
-                script {
-                    def fullImage = "${IMAGE_NAME}:${IMAGE_TAG}"
+                echo "==> Run unit, mutation, integration and performance tests"
+                sh '''
+                    set -e
+                    . .venv/bin/activate
 
-                    echo "==> Start Docker container for tests"
-                    sh """
-                        docker run --name python-jenkins-pipeline \
-                                   --detach --rm \
-                                   --network ci \
-                                   -p 5001:5000 \
-                                   ${fullImage}
-                    """
+                    # Run app container for tests
+                    docker run --name python-jenkins-pipeline \
+                               --detach --rm \
+                               --network ci \
+                               -p 5001:5000 \
+                               $IMAGE_NAME:$BUILD_NUMBER
 
-                    echo "==> Run unit tests"
-                    sh "nosetests -v test"
+                    # Unit tests
+                    nosetests -v test
 
-                    echo "==> Run mutation tests (cosmic-ray)"
-                    sh """
-                        cosmic-ray init config.yml jenkins_session && \
-                        cosmic-ray --verbose exec jenkins_session && \
-                        cosmic-ray dump jenkins_session | cr-report
-                    """
+                    # Mutation tests
+                    cosmic-ray init config.yml jenkins_session
+                    cosmic-ray --verbose exec jenkins_session
+                    cosmic-ray dump jenkins_session | cr-report
 
-                    echo "==> Run integration tests"
-                    sh "nosetests -v int_test"
+                    # Integration tests
+                    nosetests -v int_test
 
-                    echo "==> Run performance tests (locust)"
-                    sh "locust -f ./perf_test/locustfile.py --no-web -c 1000 -r 100 --run-time 1m -H http://172.18.0.3:5001"
+                    # Performance tests
+                    locust -f ./perf_test/locustfile.py --no-web \
+                           -c 1000 -r 100 --run-time 1m \
+                           -H http://172.18.0.3:5001
 
-                    echo "==> Stop test container"
-                    sh "docker stop python-jenkins-pipeline || true"
-                }
+                    # Always try to stop container at the end
+                    docker stop python-jenkins-pipeline || true
+                '''
             }
         }
 
-        // ------------------ quality ------------------
+        // ==================== quality ====================
         stage('quality') {
             steps {
-                echo "==> Dependency vulnerability checks (safety)"
-                sh "safety check"
+                echo "==> Dependency vulnerability checks and code inspection"
+                sh '''
+                    set -e
+                    . .venv/bin/activate
 
-                echo "==> Code inspection & quality gate (pylama)"
-                sh "pylama"
+                    safety check
+                    pylama
+                '''
             }
         }
     }
