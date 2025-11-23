@@ -120,7 +120,8 @@ PYCODE
                             sh """
                                 set -eux
                                 ${venvActivate}
-                                pylama
+                                # Only lint Python source files/directories to avoid binary/invalid encodings
+                                pylama run.py app test int_test perf_test
                             """
                         }
                     )
