@@ -17,50 +17,53 @@
       "python3"
     ],
     "environment": {
-      "HOME": "$PWD",
-      "PATH": "${HOME}/.local/bin:$PATH"
+      "HOME": "${PWD}"
     }
   },
   "build": {
-    "description": "Compile and package application",
+    "description": "Compile Python sources and build Docker image",
     "commands": [
-      "python -m compileall .",
-      "docker build -t $IMAGE_NAME:$BUILD_NUMBER ."
+      "compileall .",
+      "docker build -t ${IMAGE_NAME}:${BUILD_NUMBER} ."
     ],
-    "artifacts": [
-      "Docker image"
-    ]
+    "tools": [
+      "docker"
+    ],
+    "environment": {
+      "HOME": "${PWD}",
+      "PATH": "${HOME}/.local/bin:${PATH}"
+    }
   },
   "test": {
-    "description": "Run unit, integration, and performance tests",
+    "description": "Run unit, integration tests",
     "commands": [
       "nosetests -v test",
-      "cosmic-ray init config.yml jenkins_session",
-      "cosmic-ray --verbose exec jenkins_session",
-      "cosmic-ray dump jenkins_session | cr-report",
-      "locust -f ./perf_test/locustfile.py --no-web -c 1000 -r 100 --run-time 1m -H http://172.18.0.3:5001"
+      "nosetests -v int_test"
     ],
-    "reports": [
-      "test-results/*.xml"
+    "tools": [
+      "pytest"
     ],
-    "junit_results": "test-results/*.xml",
-    "coverage_report": ""
+    "environment": {
+      "HOME": "${PWD}",
+      "PATH": "${HOME}/.local/bin:${PATH}"
+    }
   },
   "quality": {
-    "description": "Linting, security checks, and dependency vulnerability scanning",
+    "description": "Code quality checks and security scans",
     "commands": [
       "safety check",
       "pylint src/",
       "flake8 src/",
-      "bandit -r src/",
-      "sonar-scanner"
+      "bandit -r src/"
     ],
     "tools": [
       "pylint",
       "flake8",
-      "bandit",
-      "safety",
-      "sonarqube"
-    ]
+      "bandit"
+    ],
+    "environment": {
+      "HOME": "${PWD}",
+      "PATH": "${HOME}/.local/bin:${PATH}"
+    }
   }
 }
