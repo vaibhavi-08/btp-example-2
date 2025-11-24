@@ -32,6 +32,9 @@ pipeline {
                     pip install --upgrade pip
                     pip install --disable-pip-version-check -r requirements.txt
 
+                    # Ensure locust is a pre-1.0 version that supports HttpLocust & --no-web
+                    pip install "locust<1.0"
+
                     # Create sitecustomize.py INSIDE THE VENV site-packages
                     python - << 'PYCODE'
 import os, sysconfig
@@ -78,7 +81,7 @@ PYCODE
                 script {
                     def venvActivate = '. .venv/bin/activate'
 
-                    // Start app container once
+                    // Start app container once for all tests
                     sh """
                         set -eux
                         docker run --name ${CONTAINER_NAME} \\
@@ -89,13 +92,57 @@ PYCODE
                     """
 
                     try {
-                        // Run unit + integration tests with nose
-                        sh """
-                            set -eux
-                            ${venvActivate}
-                            nosetests -v test
-                            nosetests -v int_test
-                        """
+                        parallel(
+                            Unit_and_Integration: {
+                                sh """
+                                    set -eux
+                                    ${venvActivate}
+                                    # Unit tests
+                                    nosetests -v test
+                                    # Integration tests
+                                    nosetests -v int_test
+                                """
+                            },
+                            Mutation_Tests: {
+                                sh """
+                                    set -eux
+                                    ${venvActivate}
+
+                                    # Create a fresh Cosmic-Ray TOML config for this run
+                                    cat > cosmic_ray_config.toml << 'EOF'
+[cosmic-ray]
+module-path = "app"
+timeout = 30.0
+excluded-modules = []
+test-command = "nosetests -v test int_test"
+
+[cosmic-ray.distributor]
+name = "local"
+EOF
+
+                                    # Init a new mutation session DB
+                                    cosmic-ray init cosmic_ray_config.toml jenkins_session.sqlite
+
+                                    # Run mutation tests
+                                    cosmic-ray exec cosmic_ray_config.toml jenkins_session.sqlite
+
+                                    # Report results (this may show surviving mutants)
+                                    cr-report jenkins_session.sqlite --show-pending
+                                """
+                            },
+                            Performance_Tests: {
+                                sh """
+                                    set -eux
+                                    ${venvActivate}
+                                    # Performance tests with Locust
+                                    # Uses pre-1.0 locust (HttpLocust + --no-web)
+                                    locust -f ./perf_test/locustfile.py \\
+                                      --no-web -c 1000 -r 100 \\
+                                      --run-time 1m \\
+                                      -H http://172.18.0.3:5001
+                                """
+                            }
+                        )
                     } finally {
                         sh 'docker stop ${CONTAINER_NAME} || true'
                     }
@@ -120,7 +167,7 @@ PYCODE
                             sh """
                                 set -eux
                                 ${venvActivate}
-                                # Only lint Python source files/directories to avoid binary/invalid encodings
+                                # Only lint Python source files/directories to avoid binary/encoding issues
                                 pylama run.py app test int_test perf_test
                             """
                         }
