@@ -1,0 +1,3 @@
+Python is easy to learn.
+Docker helps package applications.
+Unit testing improves code quality.
