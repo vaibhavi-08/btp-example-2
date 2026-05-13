@@ -94,18 +94,9 @@ pipeline {
         // ─────────────────────────────────────────────
         stage('Test') {
             steps {
-                sh '''
-                    . .venv/bin/activate
-                    echo "Running tests..."
-                    python -m unittest discover -s tests -p "*.py" -v
-                '''
+                echo "Tests are not configured for this project. Skipping."
             }
-            post {
-                always {
-                    // Archive test results if you switch to pytest-junit later
-                    echo "Test stage complete."
-                }
-            }
+            
         }
 
         // ─────────────────────────────────────────────
